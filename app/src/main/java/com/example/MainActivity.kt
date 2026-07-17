@@ -36,6 +36,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -108,7 +109,7 @@ fun InstaUtilApp() {
             // For desktop, we might want to force a smaller scale initially to see "everything"
             webView?.setInitialScale(0) 
         }
-        webView?.reload()
+        // webView?.reload() // Auto-reload disabled as requested
     }
 
     LaunchedEffect(isProxyEnabled) {
@@ -125,7 +126,7 @@ fun InstaUtilApp() {
                     // Proxy cleared successfully
                 })
             }
-            webView?.reload()
+            // webView?.reload() // Auto-reload disabled as requested
         }
     }
 
@@ -346,6 +347,7 @@ fun InstaUtilApp() {
                     icon = Icons.Default.DesktopWindows,
                     iconBg = Blue50,
                     iconTint = Blue500,
+                    showSwitch = true,
                     isActive = isDesktopMode,
                     onClick = { isDesktopMode = !isDesktopMode },
                     tag = "desktop_mode_card"
@@ -355,6 +357,7 @@ fun InstaUtilApp() {
                     icon = Icons.Default.Security,
                     iconBg = Emerald50,
                     iconTint = Emerald600,
+                    showSwitch = true,
                     isActive = isProxyEnabled,
                     onClick = { isProxyEnabled = !isProxyEnabled },
                     tag = "proxy_card"
@@ -422,6 +425,7 @@ fun BentoCard(
     icon: ImageVector,
     iconBg: Color,
     iconTint: Color,
+    showSwitch: Boolean = false,
     isActive: Boolean = false,
     onClick: () -> Unit,
     tag: String
@@ -433,7 +437,7 @@ fun BentoCard(
             .clickable { onClick() }
             .border(
                 width = 1.dp,
-                color = if (isActive) Blue500 else Slate100,
+                color = if (isActive && showSwitch) Blue500 else Slate100,
                 shape = RoundedCornerShape(10.dp)
             )
             .padding(horizontal = 8.dp, vertical = 4.dp)
@@ -459,12 +463,27 @@ fun BentoCard(
             }
             Spacer(Modifier.width(6.dp))
             Text(
-                text = if (isActive) title.uppercase() else title,
-                fontWeight = if (isActive) FontWeight.ExtraBold else FontWeight.Bold,
+                text = if (isActive && showSwitch) title.uppercase() else title,
+                fontWeight = if (isActive && showSwitch) FontWeight.ExtraBold else FontWeight.Bold,
                 fontSize = 10.sp,
-                color = if (isActive) Blue500 else Slate700,
+                color = if (isActive && showSwitch) Blue500 else Slate700,
                 textAlign = TextAlign.Center
             )
+            
+            if (showSwitch) {
+                Spacer(Modifier.width(6.dp))
+                Switch(
+                    checked = isActive,
+                    onCheckedChange = { onClick() },
+                    modifier = Modifier.scale(0.5f), // Make the switch very small to fit
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = Blue500,
+                        uncheckedThumbColor = Slate400,
+                        uncheckedTrackColor = Slate200
+                    )
+                )
+            }
         }
     }
 }

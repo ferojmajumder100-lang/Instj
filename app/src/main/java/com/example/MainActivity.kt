@@ -73,7 +73,7 @@ class MainActivity : ComponentActivity() {
 fun InstaUtilApp() {
     val context = LocalContext.current
     var webView: WebView? by remember { mutableStateOf(null) }
-    var currentUrl by remember { mutableStateOf("https://www.instagram.com") }
+    var currentUrl by remember { mutableStateOf("https://limited.facebook.com") }
     var isLoading by remember { mutableStateOf(false) }
     var canGoBack by remember { mutableStateOf(false) }
     var canGoForward by remember { mutableStateOf(false) }
@@ -81,8 +81,11 @@ fun InstaUtilApp() {
     var isDesktopMode by remember { mutableStateOf(false) }
     var isProxyEnabled by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    var showCookieLoginDialog by remember { mutableStateOf(false) }
+    var cookieInput by remember { mutableStateOf("") }
     
     val focusManager = LocalFocusManager.current
+    val clipboardManager = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
 
     val desktopUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
     val mobileUserAgent = WebSettings.getDefaultUserAgent(context)
@@ -90,8 +93,8 @@ fun InstaUtilApp() {
     // Proxy Config
     val proxyHost = "change6.owlproxy.com"
     val proxyPort = 7778
-    val proxyUser = "117Sz8vwEt70_custom_zone_BD"
-    val proxyPass = "3341056"
+    val proxyUser = "iZm3XTj3t830_custom_zone_RE"
+    val proxyPass = "5138110"
 
     LaunchedEffect(isDesktopMode) {
         webView?.settings?.apply {
@@ -184,7 +187,7 @@ fun InstaUtilApp() {
                             .padding(horizontal = 4.dp)
                             .height(40.dp)
                             .testTag("search_bar"),
-                        placeholder = { Text("instagram.com", fontSize = 12.sp, color = Slate400) },
+                        placeholder = { Text("facebook.com", fontSize = 12.sp, color = Slate400) },
                         singleLine = true,
                         colors = TextFieldDefaults.colors(
                             focusedContainerColor = BackgroundGray,
@@ -334,50 +337,89 @@ fun InstaUtilApp() {
             }
 
             // Bento Box Shortcuts
-            Row(
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(3),
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(BackgroundGray)
-                    .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 8.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(bottom = 4.dp)
             ) {
-                BentoCard(
-                    title = "Desktop",
-                    icon = Icons.Default.DesktopWindows,
-                    iconBg = Blue50,
-                    iconTint = Blue500,
-                    showSwitch = true,
-                    isActive = isDesktopMode,
-                    onClick = { isDesktopMode = !isDesktopMode },
-                    tag = "desktop_mode_card"
-                )
-                BentoCard(
-                    title = "Privacy",
-                    icon = Icons.Default.Security,
-                    iconBg = Emerald50,
-                    iconTint = Emerald600,
-                    showSwitch = true,
-                    isActive = isProxyEnabled,
-                    onClick = { isProxyEnabled = !isProxyEnabled },
-                    tag = "proxy_card"
-                )
-                BentoCard(
-                    title = "Security",
-                    icon = Icons.Default.Lock,
-                    iconBg = Indigo50,
-                    iconTint = Indigo600,
-                    onClick = { webView?.loadUrl("https://accountscenter.instagram.com/password_and_security/") },
-                    tag = "security_card"
-                )
-                BentoCard(
-                    title = "Profile",
-                    icon = Icons.Default.Person,
-                    iconBg = Orange50,
-                    iconTint = Orange600,
-                    onClick = { webView?.loadUrl("https://accountscenter.instagram.com/personal_details/contact_points/") },
-                    tag = "profile_card"
-                )
+                item {
+                    BentoCard(
+                        title = "Desktop",
+                        icon = Icons.Default.DesktopWindows,
+                        iconBg = Blue50,
+                        iconTint = Blue500,
+                        showSwitch = true,
+                        isActive = isDesktopMode,
+                        onClick = { isDesktopMode = !isDesktopMode },
+                        tag = "desktop_mode_card"
+                    )
+                }
+                item {
+                    BentoCard(
+                        title = "Privacy",
+                        icon = Icons.Default.Security,
+                        iconBg = Emerald50,
+                        iconTint = Emerald600,
+                        showSwitch = true,
+                        isActive = isProxyEnabled,
+                        onClick = { isProxyEnabled = !isProxyEnabled },
+                        tag = "proxy_card"
+                    )
+                }
+                item {
+                    BentoCard(
+                        title = "Login",
+                        icon = Icons.Default.Login,
+                        iconBg = Blue50,
+                        iconTint = Blue500,
+                        onClick = { showCookieLoginDialog = true },
+                        tag = "cookie_login_card"
+                    )
+                }
+                item {
+                    BentoCard(
+                        title = "Cookie",
+                        icon = Icons.Default.ContentCopy,
+                        iconBg = Indigo50,
+                        iconTint = Indigo600,
+                        onClick = {
+                            val cookies = CookieManager.getInstance().getCookie(currentUrl)
+                            if (cookies != null) {
+                                val clip = android.content.ClipData.newPlainText("Cookies", cookies)
+                                clipboardManager.setPrimaryClip(clip)
+                                android.widget.Toast.makeText(context, "Cookies copied!", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        tag = "copy_cookie_card"
+                    )
+                }
+                item {
+                    BentoCard(
+                        title = "UID",
+                        icon = Icons.Default.Fingerprint,
+                        iconBg = Slate100,
+                        iconTint = Slate900,
+                        onClick = {
+                            val cookies = CookieManager.getInstance().getCookie(currentUrl)
+                            if (cookies != null) {
+                                val cUser = cookies.split("; ").find { it.startsWith("c_user=") }?.split("=")?.get(1)
+                                if (cUser != null) {
+                                    val clip = android.content.ClipData.newPlainText("UID", cUser)
+                                    clipboardManager.setPrimaryClip(clip)
+                                    android.widget.Toast.makeText(context, "UID copied: $cUser", android.widget.Toast.LENGTH_SHORT).show()
+                                } else {
+                                    android.widget.Toast.makeText(context, "UID not found in cookies!", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                        tag = "copy_uid_card"
+                    )
+                }
             }
 
             Surface(
@@ -395,7 +437,7 @@ fun InstaUtilApp() {
                             clearHistory()
                             CookieManager.getInstance().removeAllCookies(null)
                             CookieManager.getInstance().flush()
-                            loadUrl("https://www.instagram.com")
+                            loadUrl("https://limited.facebook.com")
                         }
                         isDesktopMode = false
                         isProxyEnabled = false
@@ -415,6 +457,49 @@ fun InstaUtilApp() {
             }
             
             Spacer(Modifier.navigationBarsPadding())
+        }
+
+        if (showCookieLoginDialog) {
+            AlertDialog(
+                onDismissRequest = { showCookieLoginDialog = false },
+                title = { Text("Login with Cookies", fontSize = 16.sp, fontWeight = FontWeight.Bold) },
+                text = {
+                    Column {
+                        Text("Paste your cookie string below:", fontSize = 12.sp, color = Slate600)
+                        Spacer(Modifier.height(8.dp))
+                        TextField(
+                            value = cookieInput,
+                            onValueChange = { cookieInput = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            placeholder = { Text("datr=...; c_user=...;", fontSize = 10.sp) },
+                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 10.sp)
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        if (cookieInput.isNotEmpty()) {
+                            val cookieManager = CookieManager.getInstance()
+                            cookieManager.setAcceptCookie(true)
+                            val cookies = cookieInput.split(";")
+                            for (cookie in cookies) {
+                                cookieManager.setCookie("https://.facebook.com", cookie.trim())
+                            }
+                            cookieManager.flush()
+                            webView?.loadUrl("https://limited.facebook.com")
+                            showCookieLoginDialog = false
+                            cookieInput = ""
+                        }
+                    }) {
+                        Text("Login", color = Blue500)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showCookieLoginDialog = false }) {
+                        Text("Cancel", color = Slate500)
+                    }
+                }
+            )
         }
     }
 }

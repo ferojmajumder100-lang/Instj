@@ -1,6 +1,6 @@
 {
-  "name": "InstaUtil",
-  "description": "Premium Instagram utility tool with desktop mode, proxy, and quick shortcuts.",
+  "name": "FB Utility",
+  "description": "Premium Facebook utility tool with desktop mode, proxy, and cookie management.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

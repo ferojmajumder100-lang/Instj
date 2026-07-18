@@ -90,7 +90,7 @@ class ProxyVpnService : VpnService() {
                 val builder = Builder()
                     .setSession("SolderVpnService")
                     .addAddress("10.8.0.2", 32)
-                    .addRoute("0.0.0.0", 0) // Route all IPv4 traffic of allowed apps to the VPN
+                    .addRoute("0.0.0.0", 0) // Route all IPv4 traffic of allowed apps to force proxy usage
 
                 // Restrict to the 5 requested package names
                 val allowedPackages = listOf(
@@ -271,12 +271,27 @@ class LocalProxyServer(
                 clientOut.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray(Charsets.UTF_8))
                 clientOut.flush()
 
-                val t1 = Thread { copyStream(clientIn, upstreamOut) }
-                val t2 = Thread { copyStream(upstreamIn, clientOut) }
-                t1.start()
-                t2.start()
-                t1.join()
-                t2.join()
+                // Robust asynchronous bidirectional streaming:
+                val upstreamFinal = upstreamSocket
+                val clientFinal = clientSocket
+                
+                Thread {
+                    try {
+                        copyStream(clientIn, upstreamFinal.getOutputStream())
+                    } catch (e: Exception) {
+                    } finally {
+                        try { clientFinal.close() } catch (e: Exception) {}
+                        try { upstreamFinal.close() } catch (e: Exception) {}
+                    }
+                }.start()
+
+                try {
+                    copyStream(upstreamFinal.getInputStream(), clientOut)
+                } catch (e: Exception) {
+                } finally {
+                    try { clientFinal.close() } catch (e: Exception) {}
+                    try { upstreamFinal.close() } catch (e: Exception) {}
+                }
             } else {
                 // For plain HTTP, we must write the original request headers we read, followed by body
                 val newHeaders = StringBuilder()
@@ -292,12 +307,27 @@ class LocalProxyServer(
                 upstreamOut.write(newHeaders.toString().toByteArray(Charsets.UTF_8))
                 upstreamOut.flush()
 
-                val t1 = Thread { copyStream(clientIn, upstreamOut) }
-                val t2 = Thread { copyStream(upstreamIn, clientOut) }
-                t1.start()
-                t2.start()
-                t1.join()
-                t2.join()
+                // Robust asynchronous bidirectional streaming:
+                val upstreamFinal = upstreamSocket
+                val clientFinal = clientSocket
+
+                Thread {
+                    try {
+                        copyStream(clientIn, upstreamFinal.getOutputStream())
+                    } catch (e: Exception) {
+                    } finally {
+                        try { clientFinal.close() } catch (e: Exception) {}
+                        try { upstreamFinal.close() } catch (e: Exception) {}
+                    }
+                }.start()
+
+                try {
+                    copyStream(upstreamFinal.getInputStream(), clientOut)
+                } catch (e: Exception) {
+                } finally {
+                    try { clientFinal.close() } catch (e: Exception) {}
+                    try { upstreamFinal.close() } catch (e: Exception) {}
+                }
             }
 
         } catch (e: Exception) {
@@ -306,6 +336,16 @@ class LocalProxyServer(
             try { clientSocket.close() } catch (e: Exception) {}
             try { upstreamSocket?.close() } catch (e: Exception) {}
         }
+    }
+
+    private fun readExactly(inputStream: InputStream, buffer: ByteArray): Boolean {
+        var bytesRead = 0
+        while (bytesRead < buffer.size) {
+            val result = inputStream.read(buffer, bytesRead, buffer.size - bytesRead)
+            if (result == -1) return false
+            bytesRead += result
+        }
+        return true
     }
 
     private fun establishSocks5Tunnel(
@@ -325,8 +365,7 @@ class LocalProxyServer(
 
             // 2. Read greeting response
             val response = ByteArray(2)
-            var bytesRead = inp.read(response)
-            if (bytesRead < 2 || response[0] != 0x05.toByte()) {
+            if (!readExactly(inp, response) || response[0] != 0x05.toByte()) {
                 Log.e("LocalProxyServer", "Invalid SOCKS5 greeting response")
                 return false
             }
@@ -352,8 +391,7 @@ class LocalProxyServer(
                 out.flush()
 
                 val authRes = ByteArray(2)
-                bytesRead = inp.read(authRes)
-                if (bytesRead < 2 || authRes[0] != 0x01.toByte() || authRes[1] != 0x00.toByte()) {
+                if (!readExactly(inp, authRes) || authRes[0] != 0x01.toByte() || authRes[1] != 0x00.toByte()) {
                     Log.e("LocalProxyServer", "SOCKS5 auth failed")
                     return false
                 }
@@ -364,7 +402,8 @@ class LocalProxyServer(
 
             // 3. Send SOCKS5 CONNECT request
             val hostBytes = targetHost.toByteArray(Charsets.UTF_8)
-            val req = ByteArray(6 + hostBytes.size)
+            // SOCKS5 CONNECT request size: 3 bytes header + 1 byte addrType + 1 byte domainLength + domainBytes + 2 bytes port = 7 + domainBytes
+            val req = ByteArray(7 + hostBytes.size)
             req[0] = 0x05
             req[1] = 0x01
             req[2] = 0x00
@@ -381,8 +420,7 @@ class LocalProxyServer(
 
             // 4. Read SOCKS5 CONNECT response
             val connResHeader = ByteArray(4)
-            bytesRead = inp.read(connResHeader)
-            if (bytesRead < 4 || connResHeader[0] != 0x05.toByte()) {
+            if (!readExactly(inp, connResHeader) || connResHeader[0] != 0x05.toByte()) {
                 Log.e("LocalProxyServer", "Invalid SOCKS5 connection response header")
                 return false
             }
@@ -398,18 +436,17 @@ class LocalProxyServer(
             when (addrType) {
                 0x01.toByte() -> { // IPv4 (4 bytes address + 2 bytes port)
                     val dummy = ByteArray(6)
-                    inp.read(dummy)
+                    if (!readExactly(inp, dummy)) return false
                 }
                 0x03.toByte() -> { // Domain name (1 byte length + length bytes + 2 bytes port)
                     val len = inp.read()
-                    if (len != -1) {
-                        val dummy = ByteArray(len + 2)
-                        inp.read(dummy)
-                    }
+                    if (len == -1) return false
+                    val dummy = ByteArray(len + 2)
+                    if (!readExactly(inp, dummy)) return false
                 }
                 0x04.toByte() -> { // IPv6 (16 bytes address + 2 bytes port)
                     val dummy = ByteArray(18)
-                    inp.read(dummy)
+                    if (!readExactly(inp, dummy)) return false
                 }
             }
             return true

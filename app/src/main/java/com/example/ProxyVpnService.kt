@@ -12,13 +12,11 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.net.ServerSocket
 import java.net.Socket
-import android.util.Base64
 import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.launch
 
 class ProxyVpnService : VpnService() {
 
@@ -31,31 +29,14 @@ class ProxyVpnService : VpnService() {
         const val ACTION_CONNECT = "com.example.proxy.action.CONNECT"
         const val ACTION_DISCONNECT = "com.example.proxy.action.DISCONNECT"
 
-        const val EXTRA_HOST = "com.example.proxy.extra.HOST"
-        const val EXTRA_PORT = "com.example.proxy.extra.PORT"
-        const val EXTRA_USER = "com.example.proxy.extra.USER"
-        const val EXTRA_PASS = "com.example.proxy.extra.PASS"
-        const val EXTRA_TYPE = "com.example.proxy.extra.TYPE"
-
         // Live connection state
         val isServiceRunning = MutableStateFlow(false)
-        val connectedProxyName = MutableStateFlow<String?>(null)
 
-        fun startVpn(context: Context, proxy: ProxyEntity) {
+        fun startVpn(context: Context) {
             val intent = Intent(context, ProxyVpnService::class.java).apply {
                 action = ACTION_CONNECT
-                putExtra(EXTRA_HOST, proxy.host)
-                putExtra(EXTRA_PORT, proxy.port)
-                putExtra(EXTRA_USER, proxy.username)
-                putExtra(EXTRA_PASS, proxy.password)
-                putExtra(EXTRA_TYPE, proxy.type)
-                putExtra("PROXY_NAME", proxy.name)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            context.startService(intent)
         }
 
         fun stopVpn(context: Context) {
@@ -76,14 +57,7 @@ class ProxyVpnService : VpnService() {
         if (intent != null) {
             when (intent.action) {
                 ACTION_CONNECT -> {
-                    val host = intent.getStringExtra(EXTRA_HOST) ?: ""
-                    val port = intent.getIntExtra(EXTRA_PORT, 8080)
-                    val user = intent.getStringExtra(EXTRA_USER) ?: ""
-                    val pass = intent.getStringExtra(EXTRA_PASS) ?: ""
-                    val type = intent.getStringExtra(EXTRA_TYPE) ?: "HTTP"
-                    val name = intent.getStringExtra("PROXY_NAME") ?: "Proxy"
-
-                    startVpnInterface(host, port, user, pass, type, name)
+                    startVpnInterface()
                 }
                 ACTION_DISCONNECT -> {
                     stopVpnInterface()
@@ -94,22 +68,46 @@ class ProxyVpnService : VpnService() {
         return START_NOT_STICKY
     }
 
-    private fun startVpnInterface(host: String, port: Int, user: String, pass: String, type: String, name: String) {
+    private fun startVpnInterface() {
         // Stop any existing connection
         stopVpnInterface()
 
-        Log.d("ProxyVpnService", "Starting VPN connection to proxy: $host:$port ($type)")
+        val host = "change5.owlproxy.com"
+        val port = 7778
+        val pass = "5138110"
+
+        // Generate username with random country code and random case
+        val user = generateRandomizedUsername()
+
+        Log.d("ProxyVpnService", "Starting VPN SOCKS5 connection using username: $user")
 
         try {
             // Start the local proxy forwarding server
             localProxyServer = LocalProxyServer(host, port, user, pass) { localPort ->
-                Log.d("ProxyVpnService", "Local proxy server started on port: $localPort")
+                Log.d("ProxyVpnService", "Local HTTP-to-SOCKS5 proxy server started on port: $localPort")
 
                 // Build VPN Interface
                 val builder = Builder()
-                    .setSession("ProxyVpnService")
+                    .setSession("SolderVpnService")
                     .addAddress("10.8.0.2", 32)
-                    .addRoute("10.8.0.0", 24) // Dummy network route to prevent packet black-holing
+                    .addRoute("0.0.0.0", 0) // Route all IPv4 traffic of allowed apps to the VPN
+
+                // Restrict to the 5 requested package names
+                val allowedPackages = listOf(
+                    "toolarafa.com",
+                    "agcsuio.com",
+                    "com.facebook.services",
+                    "com.google.android.gsf",
+                    "com.google.android.gms"
+                )
+                for (pkg in allowedPackages) {
+                    try {
+                        builder.addAllowedApplication(pkg)
+                        Log.d("ProxyVpnService", "Added allowed application: $pkg")
+                    } catch (e: Exception) {
+                        Log.w("ProxyVpnService", "Could not add allowed application: $pkg (Not installed)")
+                    }
+                }
 
                 // Set system-wide HTTP proxy configuration on the VPN interface (API 29+)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -119,9 +117,7 @@ class ProxyVpnService : VpnService() {
                 }
 
                 vpnInterface = builder.establish()
-
                 isServiceRunning.value = true
-                connectedProxyName.value = name
             }
             localProxyServer?.start()
 
@@ -129,6 +125,15 @@ class ProxyVpnService : VpnService() {
             Log.e("ProxyVpnService", "Error establishing VPN connection", e)
             stopVpnInterface()
         }
+    }
+
+    private fun generateRandomizedUsername(): String {
+        val countries = listOf("BD", "SL", "GN", "US", "DE", "ES", "FR")
+        val country = countries.random()
+        val randomizedCountry = country.map { char ->
+            if (java.util.Random().nextBoolean()) char.uppercaseChar() else char.lowercaseChar()
+        }.joinToString("")
+        return "iZm3XTj3t830_custom_zone_$randomizedCountry"
     }
 
     private fun stopVpnInterface() {
@@ -148,14 +153,12 @@ class ProxyVpnService : VpnService() {
         }
 
         isServiceRunning.value = false
-        connectedProxyName.value = null
     }
 }
 
 /**
- * Lightweight HTTP proxy forwarding server.
- * Handles HTTPS CONNECT requests and plain HTTP requests by forwarding them to the upstream proxy.
- * Adds upstream Basic Authentication if credentials are provided.
+ * Lightweight local HTTP proxy forwarding server that bridges to upstream SOCKS5.
+ * Handles HTTPS CONNECT requests and plain HTTP requests by establishing a SOCKS5 tunnel to the destination.
  */
 class LocalProxyServer(
     private val upstreamHost: String,
@@ -225,57 +228,63 @@ class LocalProxyServer(
             val method = parts[0]
             val target = parts[1]
 
-            // Connect to actual upstream proxy
+            // Parse target host and port
+            var targetHost: String
+            var targetPort: Int
+
+            if (method.equals("CONNECT", ignoreCase = true)) {
+                // HTTPS CONNECT: target is usually "host:port"
+                val hostPort = target.split(":")
+                targetHost = hostPort[0]
+                targetPort = if (hostPort.size > 1) hostPort[1].toIntOrNull() ?: 443 else 443
+            } else {
+                // Plain HTTP: target is usually "http://host/path"
+                var url = target
+                if (url.startsWith("http://", ignoreCase = true)) {
+                    url = url.substring(7)
+                } else if (url.startsWith("https://", ignoreCase = true)) {
+                    url = url.substring(8)
+                }
+                val pathIdx = url.indexOf('/')
+                val hostPart = if (pathIdx != -1) url.substring(0, pathIdx) else url
+                val hostPort = hostPart.split(":")
+                targetHost = hostPort[0]
+                targetPort = if (hostPort.size > 1) hostPort[1].toIntOrNull() ?: 80 else 80
+            }
+
+            // Connect to actual upstream SOCKS5 proxy
             upstreamSocket = Socket(upstreamHost, upstreamPort)
+            
+            // Perform SOCKS5 authentication and handshake to target
+            val handshakeSuccess = establishSocks5Tunnel(upstreamSocket, targetHost, targetPort, username, password)
+            if (!handshakeSuccess) {
+                clientSocket.close()
+                upstreamSocket.close()
+                return
+            }
+
             val upstreamIn = upstreamSocket.getInputStream()
             val upstreamOut = upstreamSocket.getOutputStream()
 
-            val authHeader = if (username.isNotEmpty()) {
-                val credentials = "$username:$password"
-                val encoded = Base64.encodeToString(credentials.toByteArray(), Base64.NO_WRAP)
-                "Proxy-Authorization: Basic $encoded\r\n"
-            } else {
-                ""
-            }
-
             if (method.equals("CONNECT", ignoreCase = true)) {
-                // HTTPS Tunneling
-                val connectRequest = "CONNECT $target HTTP/1.1\r\n" +
-                        "Host: $target\r\n" +
-                        authHeader +
-                        "\r\n"
-                upstreamOut.write(connectRequest.toByteArray(Charsets.UTF_8))
-                upstreamOut.flush()
+                // Respond to client that connection is established
+                clientOut.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray(Charsets.UTF_8))
+                clientOut.flush()
 
-                val upstreamHeaders = readHeaders(upstreamIn)
-                val responseStr = String(upstreamHeaders, Charsets.UTF_8)
-                if (responseStr.contains("200")) {
-                    clientOut.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray(Charsets.UTF_8))
-                    clientOut.flush()
-
-                    val t1 = Thread { copyStream(clientIn, upstreamOut) }
-                    val t2 = Thread { copyStream(upstreamIn, clientOut) }
-                    t1.start()
-                    t2.start()
-                    t1.join()
-                    t2.join()
-                } else {
-                    clientOut.write(upstreamHeaders)
-                    clientOut.flush()
-                }
+                val t1 = Thread { copyStream(clientIn, upstreamOut) }
+                val t2 = Thread { copyStream(upstreamIn, clientOut) }
+                t1.start()
+                t2.start()
+                t1.join()
+                t2.join()
             } else {
-                // Plain HTTP Request
+                // For plain HTTP, we must write the original request headers we read, followed by body
                 val newHeaders = StringBuilder()
                 newHeaders.append(requestLine).append("\r\n")
-                if (username.isNotEmpty()) {
-                    newHeaders.append(authHeader)
-                }
                 for (i in 1 until lines.size) {
                     val line = lines[i]
                     if (line.isNotEmpty()) {
-                        if (!line.startsWith("Proxy-Authorization:", ignoreCase = true)) {
-                            newHeaders.append(line).append("\r\n")
-                        }
+                        newHeaders.append(line).append("\r\n")
                     }
                 }
                 newHeaders.append("\r\n")
@@ -296,6 +305,117 @@ class LocalProxyServer(
         } finally {
             try { clientSocket.close() } catch (e: Exception) {}
             try { upstreamSocket?.close() } catch (e: Exception) {}
+        }
+    }
+
+    private fun establishSocks5Tunnel(
+        upstreamSocket: Socket,
+        targetHost: String,
+        targetPort: Int,
+        user: String,
+        pass: String
+    ): Boolean {
+        try {
+            val out = upstreamSocket.getOutputStream()
+            val inp = upstreamSocket.getInputStream()
+
+            // 1. Send SOCKS5 greeting (methods: No Auth [0x00], Username/Password [0x02])
+            out.write(byteArrayOf(0x05, 0x02, 0x00, 0x02))
+            out.flush()
+
+            // 2. Read greeting response
+            val response = ByteArray(2)
+            var bytesRead = inp.read(response)
+            if (bytesRead < 2 || response[0] != 0x05.toByte()) {
+                Log.e("LocalProxyServer", "Invalid SOCKS5 greeting response")
+                return false
+            }
+
+            val selectedMethod = response[1]
+            if (selectedMethod == 0x02.toByte()) {
+                // Username/Password authentication
+                if (user.isEmpty()) {
+                    Log.e("LocalProxyServer", "Upstream SOCKS5 requires auth but credentials are empty")
+                    return false
+                }
+                val userBytes = user.toByteArray(Charsets.UTF_8)
+                val passBytes = pass.toByteArray(Charsets.UTF_8)
+                
+                val authReq = ByteArray(3 + userBytes.size + passBytes.size)
+                authReq[0] = 0x01 // Subnegotiation version
+                authReq[1] = userBytes.size.toByte()
+                System.arraycopy(userBytes, 0, authReq, 2, userBytes.size)
+                authReq[2 + userBytes.size] = passBytes.size.toByte()
+                System.arraycopy(passBytes, 0, authReq, 3 + userBytes.size, passBytes.size)
+                
+                out.write(authReq)
+                out.flush()
+
+                val authRes = ByteArray(2)
+                bytesRead = inp.read(authRes)
+                if (bytesRead < 2 || authRes[0] != 0x01.toByte() || authRes[1] != 0x00.toByte()) {
+                    Log.e("LocalProxyServer", "SOCKS5 auth failed")
+                    return false
+                }
+            } else if (selectedMethod != 0x00.toByte()) {
+                Log.e("LocalProxyServer", "Unsupported SOCKS5 auth method: $selectedMethod")
+                return false
+            }
+
+            // 3. Send SOCKS5 CONNECT request
+            val hostBytes = targetHost.toByteArray(Charsets.UTF_8)
+            val req = ByteArray(6 + hostBytes.size)
+            req[0] = 0x05
+            req[1] = 0x01
+            req[2] = 0x00
+            req[3] = 0x03 // Domain name address type
+            req[4] = hostBytes.size.toByte()
+            System.arraycopy(hostBytes, 0, req, 5, hostBytes.size)
+            
+            // Port: 2 bytes (Big Endian)
+            req[5 + hostBytes.size] = (targetPort shr 8 and 0xFF).toByte()
+            req[6 + hostBytes.size] = (targetPort and 0xFF).toByte()
+
+            out.write(req)
+            out.flush()
+
+            // 4. Read SOCKS5 CONNECT response
+            val connResHeader = ByteArray(4)
+            bytesRead = inp.read(connResHeader)
+            if (bytesRead < 4 || connResHeader[0] != 0x05.toByte()) {
+                Log.e("LocalProxyServer", "Invalid SOCKS5 connection response header")
+                return false
+            }
+
+            val status = connResHeader[1]
+            if (status != 0x00.toByte()) {
+                Log.e("LocalProxyServer", "SOCKS5 connect failed with status: $status")
+                return false
+            }
+
+            val addrType = connResHeader[3]
+            // Skip the bound address and port fields
+            when (addrType) {
+                0x01.toByte() -> { // IPv4 (4 bytes address + 2 bytes port)
+                    val dummy = ByteArray(6)
+                    inp.read(dummy)
+                }
+                0x03.toByte() -> { // Domain name (1 byte length + length bytes + 2 bytes port)
+                    val len = inp.read()
+                    if (len != -1) {
+                        val dummy = ByteArray(len + 2)
+                        inp.read(dummy)
+                    }
+                }
+                0x04.toByte() -> { // IPv6 (16 bytes address + 2 bytes port)
+                    val dummy = ByteArray(18)
+                    inp.read(dummy)
+                }
+            }
+            return true
+        } catch (e: Exception) {
+            Log.e("LocalProxyServer", "SOCKS5 Handshake failed with exception", e)
+            return false
         }
     }
 

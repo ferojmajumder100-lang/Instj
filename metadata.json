@@ -1,6 +1,6 @@
 {
-  "name": "FB TOOL",
-  "description": "Premium Facebook utility tool with desktop mode, proxy, and cookie management.",
+  "name": "SOLDER",
+  "description": "Secure direct SOCKS5 routing utility.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

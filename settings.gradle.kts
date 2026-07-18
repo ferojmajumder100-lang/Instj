@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "FB TOOL"
+rootProject.name = "SOLDER"
 
 include(":app")

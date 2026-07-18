@@ -90,7 +90,7 @@ class ProxyVpnService : VpnService() {
                 val builder = Builder()
                     .setSession("SolderVpnService")
                     .addAddress("10.8.0.2", 32)
-                    .addRoute("0.0.0.0", 0) // Route all IPv4 traffic of allowed apps to force proxy usage
+                    .addRoute("10.8.0.0", 24) // Dummy local route to avoid black-holing DNS and physical IP traffic
 
                 // Restrict to the 5 requested package names
                 val allowedPackages = listOf(

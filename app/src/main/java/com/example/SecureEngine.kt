@@ -1,38 +1,32 @@
 package com.example
 
 import android.annotation.SuppressLint
-import android.graphics.Bitmap
+import android.app.Activity
+import android.content.Context
+import android.net.VpnService
 import android.os.Bundle
-import android.view.ViewGroup
-import android.webkit.CookieManager
-import android.webkit.HttpAuthHandler
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceRequest
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.animation.AnimatedVisibility
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -43,901 +37,947 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.webkit.ProxyConfig
-import androidx.webkit.ProxyController
-import androidx.webkit.WebViewFeature
-import android.content.Context
-import android.util.Base64
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material3.Icon
-import androidx.compose.material3.Surface
-import androidx.compose.material3.TextField
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.theme.*
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import org.json.JSONObject
-import java.util.*
-import java.util.concurrent.Executors
 
 class SecureEngine : ComponentActivity() {
+    private val database by lazy { ProxyDatabase.getDatabase(this) }
+    private val repository by lazy { ProxyRepository(database.proxyDao()) }
+    private val viewModel by lazy {
+        ViewModelProvider(this, ProxyViewModelFactory(repository))[ProxyViewModel::class.java]
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             MyApplicationTheme(dynamicColor = false) {
-                InstaUtilApp()
+                ProxyManagerApp(viewModel)
             }
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
-@SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun InstaUtilApp() {
-    val context = LocalContext.current
-    
-    // Security States
-    var isAppActive by remember { mutableStateOf(false) }
-    var isDeviceAllowed by remember { mutableStateOf(false) }
-    var remotePassword by remember { mutableStateOf("") }
-    var isIntegrityOk by remember { mutableStateOf(true) }
-    
-    val deviceId = remember { 
-        android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: "Unknown"
-    }
-    
-    // Integrity & Security
-    LaunchedEffect(Unit) {
-        val actualPackage = context.packageName
-        val actualAppName = context.getString(R.string.app_name)
-        val decodedUrl = Asjwhwi.RAW_URL
-        
-        // Crash if tampered
-        if (actualPackage != Asjwhwi.EXPECTED_PACKAGE || 
-            actualAppName != Asjwhwi.EXPECTED_APP_NAME || 
-            decodedUrl != "https://pastebin.com/raw/hkgf3b24" ||
-            android.os.Debug.isDebuggerConnected()) {
-            android.os.Process.killProcess(android.os.Process.myPid())
-            System.exit(1)
-        }
-        isIntegrityOk = true
-    }
-    
-    // Poll Pastebin every 5s
-    LaunchedEffect(Unit) {
-        val client = OkHttpClient()
-        val rawUrl = Asjwhwi.RAW_URL
-        
-        while (true) {
-            try {
-                val request = Request.Builder().url(rawUrl).build()
-                val response = withContext(Dispatchers.IO) {
-                    client.newCall(request).execute()
-                }
-                
-                if (response.isSuccessful) {
-                    val body = response.body?.string() ?: ""
-                    if (body.startsWith("{")) {
-                        val json = JSONObject(body)
-                        val status = json.optString("status", "OFF")
-                        remotePassword = json.optString("password", "")
-                        
-                        // Device Check
-                        val allowedDevices = json.optJSONArray("allowed_devices")
-                        var found = false
-                        if (allowedDevices != null) {
-                            for (i in 0 until allowedDevices.length()) {
-                                if (allowedDevices.getString(i) == deviceId) {
-                                    found = true
-                                    break
-                                }
-                            }
-                        }
-                        isDeviceAllowed = found
-                        isAppActive = status == "ON"
-                    } else {
-                        isAppActive = body.trim() == "ON"
-                        isDeviceAllowed = false // Default to false if not JSON
-                    }
-                } else {
-                    isAppActive = false
-                }
-            } catch (e: Exception) {
-                isAppActive = false
-            }
-            delay(5000)
-        }
-    }
-
-    if (!isIntegrityOk) {
-        Box(modifier = Modifier.fillMaxSize().background(Color.White), contentAlignment = Alignment.Center) {
-            Text("Something went wrong", color = Color.Gray)
-        }
-        return
-    }
-
-    if (!isAppActive) {
-        Box(modifier = Modifier.fillMaxSize().background(Color.White)) {
-            // Keep it silent as requested
-        }
-        return
-    }
-
-    if (!isDeviceAllowed) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colorScheme.surface)
-                .padding(24.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Lock,
-                    contentDescription = null,
-                    modifier = Modifier.size(64.dp),
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = "Device Not Activated",
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "Please contact admin to activate your device.",
-                    fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center
-                )
-                Spacer(modifier = Modifier.height(24.dp))
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "Your Device ID:",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Text(
-                            text = deviceId,
-                            fontSize = 14.sp,
-                            fontFamily = FontFamily.Monospace,
-                            modifier = Modifier.padding(vertical = 4.dp)
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Button(
-                            onClick = {
-                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                                val clip = android.content.ClipData.newPlainText("Device ID", deviceId)
-                                clipboard.setPrimaryClip(clip)
-                                android.widget.Toast.makeText(context, "Copied to Clipboard", android.widget.Toast.LENGTH_SHORT).show()
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text("Copy Device ID")
-                        }
-                    }
-                }
-            }
-        }
-        return
-    }
-
-    var webView: WebView? by remember { mutableStateOf(null) }
-    var currentUrl by remember { mutableStateOf("https://limited.facebook.com") }
-    var isLoading by remember { mutableStateOf(false) }
-    var canGoBack by remember { mutableStateOf(false) }
-    var canGoForward by remember { mutableStateOf(false) }
-    
-    var isDesktopMode by remember { mutableStateOf(false) }
-    var searchQuery by remember { mutableStateOf("https://limited.facebook.com") }
-    var showCookieLoginDialog by remember { mutableStateOf(false) }
-    var showGuideDialog by remember { mutableStateOf(false) }
-    var showPasswordDialog by remember { mutableStateOf(false) }
-    var passwordInput by remember { mutableStateOf("") }
-    var guideLanguage by remember { mutableStateOf("BN") } // "BN" or "EN"
-    var cookieInput by remember { mutableStateOf("") }
-    var lastUsedCookie by remember { mutableStateOf("") }
-    
-    val scope = rememberCoroutineScope()
-    val focusManager = LocalFocusManager.current
-    val clipboardManager = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-
-    val desktopUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
-    val mobileUserAgent = WebSettings.getDefaultUserAgent(context)
-
-    // Proxy Config
-    val proxyHost = "change6.owlproxy.com"
-    val proxyPort = 7778
-    val proxyUser = "iZm3XTj3t830_custom_zone_RE"
-    val proxyPass = "5138110"
-
-    LaunchedEffect(isDesktopMode, webView) {
-        webView?.let { view ->
-            view.settings.apply {
-                userAgentString = if (isDesktopMode) desktopUserAgent else mobileUserAgent
-                useWideViewPort = true
-                loadWithOverviewMode = true
-                setSupportZoom(true)
-                builtInZoomControls = true
-                displayZoomControls = false
-            }
-            // Set initial scale to 1 for mobile, but let loadWithOverviewMode handle desktop
-            view.setInitialScale(0)
-            view.reload()
-        }
-    }
-
-    BackHandler(enabled = canGoBack) {
-        webView?.goBack()
-    }
+fun ProxyManagerApp(viewModel: ProxyViewModel) {
+    var selectedTab by remember { mutableStateOf(0) }
 
     Scaffold(
         containerColor = BackgroundGray,
-        topBar = {
-            Column(
-                modifier = Modifier
-                    .statusBarsPadding()
-                    .background(Color.White)
-                    .padding(vertical = 4.dp, horizontal = 8.dp)
+        bottomBar = {
+            NavigationBar(
+                containerColor = Color.White,
+                tonalElevation = 8.dp,
+                modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    IconButton(
-                        onClick = { webView?.goBack() },
-                        enabled = canGoBack,
-                        modifier = Modifier
-                            .size(32.dp)
-                            .testTag("back_button")
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack, 
-                            contentDescription = "Back",
-                            modifier = Modifier.size(20.dp),
-                            tint = if (canGoBack) Slate600 else Slate400
-                        )
-                    }
-                    IconButton(
-                        onClick = { webView?.goForward() },
-                        enabled = canGoForward,
-                        modifier = Modifier
-                            .size(32.dp)
-                            .testTag("forward_button")
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowForward, 
-                            contentDescription = "Forward",
-                            modifier = Modifier.size(20.dp),
-                            tint = if (canGoForward) Slate600 else Slate400
-                        )
-                    }
-                    
-                    TextField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(horizontal = 4.dp)
-                            .height(40.dp)
-                            .testTag("search_bar"),
-                        placeholder = { Text("facebook.com", fontSize = 12.sp, color = Slate400) },
-                        singleLine = true,
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = BackgroundGray,
-                            unfocusedContainerColor = BackgroundGray,
-                            focusedIndicatorColor = Color.Transparent,
-                            unfocusedIndicatorColor = Color.Transparent,
-                            cursorColor = Blue500
-                        ),
-                        shape = RoundedCornerShape(20.dp),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                        keyboardActions = KeyboardActions(onSearch = {
-                            val url = if (searchQuery.contains(".") && !searchQuery.contains(" ")) {
-                                if (searchQuery.startsWith("http")) searchQuery else "https://$searchQuery"
-                            } else {
-                                "https://www.google.com/search?q=$searchQuery"
-                            }
-                            webView?.loadUrl(url)
-                            focusManager.clearFocus()
-                        }),
-                        leadingIcon = {
-                            Icon(Icons.Default.Search, contentDescription = null, tint = Slate400, modifier = Modifier.size(16.dp))
-                        },
-                        trailingIcon = {
-                            if (searchQuery.isNotEmpty()) {
-                                IconButton(
-                                    onClick = { searchQuery = "" },
-                                    modifier = Modifier.size(24.dp)
-                                ) {
-                                    Icon(Icons.Default.Clear, contentDescription = "Clear", tint = Slate400, modifier = Modifier.size(16.dp))
-                                }
-                            }
-                        }
+                NavigationBarItem(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    icon = { Icon(Icons.Default.Dns, contentDescription = null) },
+                    label = { Text("সংযোগ", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Blue600,
+                        selectedTextColor = Blue600,
+                        indicatorColor = Blue50
                     )
-
-                    IconButton(
-                        onClick = { webView?.reload() },
-                        modifier = Modifier
-                            .size(32.dp)
-                            .testTag("reload_button")
-                    ) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Reload", tint = Slate600, modifier = Modifier.size(20.dp))
-                    }
-                }
-                
-                if (isLoading) {
-                    LinearProgressIndicator(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(2.dp)
-                            .padding(top = 4.dp),
-                        color = Blue500,
-                        trackColor = Slate100
+                )
+                NavigationBarItem(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    icon = { Icon(Icons.Default.FormatListBulleted, contentDescription = null) },
+                    label = { Text("প্রোফাইল", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Blue600,
+                        selectedTextColor = Blue600,
+                        indicatorColor = Blue50
                     )
-                } else {
-                    Spacer(Modifier.height(6.dp))
-                    Divider(color = Slate200, thickness = 1.dp)
-                }
+                )
+                NavigationBarItem(
+                    selected = selectedTab == 2,
+                    onClick = { selectedTab = 2 },
+                    icon = { Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = null) },
+                    label = { Text("গাইড", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Blue600,
+                        selectedTextColor = Blue600,
+                        indicatorColor = Blue50
+                    )
+                )
             }
         }
     ) { paddingValues ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            Box(modifier = Modifier.weight(1f)) {
-                AndroidView(
-                    modifier = Modifier.fillMaxSize(),
-                    factory = { context ->
-                        WebView(context).apply {
-                            layoutParams = ViewGroup.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                ViewGroup.LayoutParams.MATCH_PARENT
-                            )
-                            settings.apply {
-                                javaScriptEnabled = true
-                                domStorageEnabled = true
-                                databaseEnabled = true
-                                allowFileAccess = true
-                                allowContentAccess = true
-                                setSupportZoom(true)
-                                builtInZoomControls = true
-                                displayZoomControls = false
-                            }
-                            
-                            webViewClient = object : WebViewClient() {
-                                override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                                    isLoading = true
-                                    // Update searchQuery only to show the real link in search bar
-                                    // without triggering a reload loop
-                                    url?.let { searchQuery = it }
-                                }
+            when (selectedTab) {
+                0 -> ConnectionTab(viewModel)
+                1 -> ProfilesTab(viewModel)
+                2 -> GuideTab()
+            }
+        }
+    }
+}
 
-                                override fun onPageFinished(view: WebView?, url: String?) {
-                                    isLoading = false
-                                    url?.let { searchQuery = it }
-                                    canGoBack = view?.canGoBack() == true
-                                    canGoForward = view?.canGoForward() == true
-                                    
-                                    // Inject JS to force pinch-to-zoom and allow deep zoom-out
-                                    val viewportWidth = if (isDesktopMode) "1024" else "device-width"
-                                    val initialScale = if (isDesktopMode) "0.4" else "1.0"
-                                    view?.evaluateJavascript(
-                                        "(function() { " +
-                                        "  var meta = document.querySelector('meta[name=\"viewport\"]'); " +
-                                        "  var content = 'width=$viewportWidth, initial-scale=$initialScale, minimum-scale=0.1, maximum-scale=5.0, user-scalable=yes'; " +
-                                        "  if (meta) { " +
-                                        "    meta.setAttribute('content', content); " +
-                                        "  } else { " +
-                                        "    meta = document.createElement('meta'); " +
-                                        "    meta.name = 'viewport'; " +
-                                        "    meta.content = content; " +
-                                        "    document.getElementsByTagName('head')[0].appendChild(meta); " +
-                                        "  } " +
-                                        "})();",
-                                        null
+@Composable
+fun ConnectionTab(viewModel: ProxyViewModel) {
+    val context = LocalContext.current
+    val activeProxy by viewModel.activeProxy.collectAsStateWithLifecycle()
+    val isProxyActive by viewModel.isProxyActive.collectAsStateWithLifecycle()
+    val testStatus by viewModel.testStatus.collectAsStateWithLifecycle()
+
+    val vpnPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            viewModel.toggleProxy(context, true)
+        } else {
+            android.widget.Toast.makeText(context, "ভিপিএন পারমিশন দেওয়া হয়নি!", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+    val breathingAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.4f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "alpha"
+    )
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            // Hero Status Header Card
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Slate900),
+                shape = RoundedCornerShape(24.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "DIRECT PROXY ROUTING",
+                        color = Blue500,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 11.sp,
+                        letterSpacing = 2.sp
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = if (isProxyActive) "প্রক্সি সক্রিয় আছে (VPN ON)" else "প্রক্সি নিষ্ক্রিয় আছে (VPN OFF)",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 20.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(18.dp))
+
+                    // Pulse indicator
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.size(90.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(75.dp)
+                                .scale(if (isProxyActive) breathingAlpha else 1.0f)
+                                .clip(CircleShape)
+                                .background(
+                                    if (isProxyActive) Emerald600.copy(alpha = 0.2f) else WarningRed.copy(alpha = 0.15f)
+                                )
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(50.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (isProxyActive) Emerald600 else WarningRed
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (isProxyActive) Icons.Default.NetworkCheck else Icons.Default.SignalWifiOff,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    if (activeProxy != null) {
+                        Surface(
+                            color = Slate800,
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column {
+                                    Text(
+                                        text = activeProxy?.name ?: "Unnamed Profile",
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White,
+                                        fontSize = 14.sp
+                                    )
+                                    Text(
+                                        text = "${activeProxy?.host}:${activeProxy?.port}",
+                                        color = Slate400,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 12.sp
+                                    )
+                                }
+                                Surface(
+                                    color = if (activeProxy?.type == "SOCKS5") Orange600.copy(alpha = 0.15f) else Blue500.copy(alpha = 0.15f),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        text = activeProxy?.type ?: "HTTP",
+                                        color = if (activeProxy?.type == "SOCKS5") Orange600 else Blue500,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 10.sp,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        Text(
+                            text = "কোনো প্রক্সি প্রোফাইল সিলেক্ট করা নেই",
+                            color = Slate400,
+                            fontSize = 13.sp,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                if (activeProxy == null) {
+                                    android.widget.Toast.makeText(context, "প্রথমে একটি প্রোফাইল সিলেক্ট করুন!", android.widget.Toast.LENGTH_SHORT).show()
+                                } else {
+                                    if (!isProxyActive) {
+                                        // Request VPN permissions if needed
+                                        val intent = VpnService.prepare(context)
+                                        if (intent != null) {
+                                            vpnPermissionLauncher.launch(intent)
+                                        } else {
+                                            viewModel.toggleProxy(context, true)
+                                        }
+                                    } else {
+                                        viewModel.toggleProxy(context, false)
+                                    }
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isProxyActive) WarningRed else Emerald600
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isProxyActive) Icons.Default.PowerSettingsNew else Icons.Default.PlayArrow,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = if (isProxyActive) "বন্ধ করুন (STOP)" else "চালু করুন (CONNECT)",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                        }
+
+                        Button(
+                            onClick = { viewModel.testProxyConnection() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Blue500),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Speed,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("প্রক্সি টেস্ট করুন", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
+            // Live Status Geolocation Card
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(20.dp)) {
+                    Text(
+                        text = "সংযোগের তথ্য (Live Connection Status)",
+                        fontWeight = FontWeight.Bold,
+                        color = Slate800,
+                        fontSize = 16.sp
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    when (val res = testStatus) {
+                        is ProxyTestResult.Idle -> {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Slate100, RoundedCornerShape(12.dp))
+                                    .padding(24.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(
+                                        imageVector = Icons.Default.Explore,
+                                        contentDescription = null,
+                                        tint = Slate400,
+                                        modifier = Modifier.size(36.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = "সংযোগ পরীক্ষা করার জন্য 'প্রক্সি টেস্ট করুন' বাটনে চাপ দিন।",
+                                        color = Slate600,
+                                        fontSize = 12.sp,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
+                        }
+
+                        is ProxyTestResult.Loading -> {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Slate100, RoundedCornerShape(12.dp))
+                                    .padding(24.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    CircularProgressIndicator(color = Blue500, strokeWidth = 3.dp)
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Text(
+                                        text = "লেটেন্সি ও আইপি পরীক্ষা করা হচ্ছে...",
+                                        color = Slate700,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+
+                        is ProxyTestResult.Success -> {
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(
+                                            if (res.latencyMs < 250) Emerald50 else Orange50,
+                                            RoundedCornerShape(8.dp)
+                                        )
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(if (res.latencyMs < 250) Emerald600 else Orange600)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "প্রক্সি সচল আছে (অনলাইন) • লেটেন্সি: ${res.latencyMs} ms",
+                                        color = if (res.latencyMs < 250) Emerald600 else Orange600,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp
                                     )
                                 }
 
-                                override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                                    return false
-                                }
+                                InfoRow(label = "আইপি ঠিকানা (IP Address)", value = res.ip, isCopyable = true, context = context)
+                                InfoRow(label = "আইএসপি (ISP)", value = res.isp, icon = Icons.Default.Router)
+                                InfoRow(label = "দেশ (Country)", value = "${res.country} 🌍", icon = Icons.Default.Public)
+                                InfoRow(label = "সিটি ও অঞ্চল (City / Region)", value = "${res.city}, ${res.region}", icon = Icons.Default.Place)
+                            }
+                        }
 
-                                override fun onReceivedHttpAuthRequest(
-                                    view: WebView?,
-                                    handler: HttpAuthHandler?,
-                                    host: String?,
-                                    realm: String?
-                                ) {
-                                    if (host == proxyHost) {
-                                        handler?.proceed(proxyUser, proxyPass)
-                                    } else {
-                                        super.onReceivedHttpAuthRequest(view, handler, host, realm)
+                        is ProxyTestResult.Error -> {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(WarningRed.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+                                    .border(1.dp, WarningRed.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+                                    .padding(16.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.ErrorOutline,
+                                        contentDescription = null,
+                                        tint = WarningRed,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column {
+                                        Text(
+                                            text = "সংযোগ ব্যর্থ হয়েছে!",
+                                            fontWeight = FontWeight.Bold,
+                                            color = WarningRed,
+                                            fontSize = 13.sp
+                                        )
+                                        Text(
+                                            text = res.message,
+                                            color = Slate700,
+                                            fontSize = 11.sp
+                                        )
                                     }
                                 }
                             }
-                            
-                            webChromeClient = object : WebChromeClient() {
-                                override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                                    // Could show detailed progress if needed
-                                }
-                            }
-                            
-                            loadUrl(currentUrl)
-                            webView = this
                         }
-                    },
-                    update = { view ->
-                        // Updates are handled via LaunchedEffects
                     }
-                )
+                }
             }
+        }
+    }
+}
 
-            // Bento Box Shortcuts
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(3),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(BackgroundGray)
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(bottom = 4.dp)
+@Composable
+fun InfoRow(label: String, value: String, isCopyable: Boolean = false, context: Context? = null, icon: ImageVector? = null) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Slate100, RoundedCornerShape(10.dp))
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+            if (icon != null) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = Slate500,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+            Column {
+                Text(text = label, fontSize = 10.sp, color = Slate500, fontWeight = FontWeight.SemiBold)
+                Text(text = value, fontSize = 13.sp, color = Slate900, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        if (isCopyable && context != null) {
+            IconButton(
+                onClick = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    val clip = android.content.ClipData.newPlainText("Copied Info", value)
+                    clipboard.setPrimaryClip(clip)
+                    android.widget.Toast.makeText(context, "Copied: $value", android.widget.Toast.LENGTH_SHORT).show()
+                },
+                modifier = Modifier.size(28.dp)
             ) {
-                item {
-                    BentoCard(
-                        title = "Guide",
-                        icon = Icons.Default.Info,
-                        iconBg = Slate100,
-                        iconTint = Slate900,
-                        onClick = { showGuideDialog = true },
-                        tag = "guide_card"
-                    )
+                Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = Blue500, modifier = Modifier.size(16.dp))
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ProfilesTab(viewModel: ProxyViewModel) {
+    val context = LocalContext.current
+    val proxies by viewModel.allProxies.collectAsStateWithLifecycle()
+    val activeProxy by viewModel.activeProxy.collectAsStateWithLifecycle()
+
+    var showAddDialog by remember { mutableStateOf(false) }
+
+    // Dialog state variables
+    var nameInput by remember { mutableStateOf("") }
+    var hostInput by remember { mutableStateOf("") }
+    var portInput by remember { mutableStateOf("") }
+    var usernameInput by remember { mutableStateOf("") }
+    var passwordInput by remember { mutableStateOf("") }
+    var selectedType by remember { mutableStateOf("HTTP") }
+
+    Scaffold(
+        containerColor = Color.Transparent,
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = {
+                    nameInput = ""
+                    hostInput = ""
+                    portInput = ""
+                    usernameInput = ""
+                    passwordInput = ""
+                    selectedType = "HTTP"
+                    showAddDialog = true
+                },
+                containerColor = Blue600,
+                contentColor = Color.White,
+                shape = CircleShape,
+                modifier = Modifier.testTag("add_proxy_fab")
+            ) {
+                Icon(Icons.Default.Add, contentDescription = "Add Proxy")
+            }
+        }
+    ) { paddingValues ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+        ) {
+            if (proxies.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(24.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.FormatListBulleted,
+                            contentDescription = null,
+                            tint = Slate400,
+                            modifier = Modifier.size(56.dp)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "কোনো প্রক্সি প্রোফাইল যোগ করা নেই",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Slate700
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "নিচের প্লাস (+) বাটনে চাপ দিয়ে একটি প্রক্সি যোগ করুন।",
+                            fontSize = 12.sp,
+                            color = Slate500,
+                            textAlign = TextAlign.Center
+                        )
+                    }
                 }
-                item {
-                    BentoCard(
-                        title = "Desktop",
-                        icon = Icons.Default.DesktopWindows,
-                        iconBg = Blue50,
-                        iconTint = Blue500,
-                        showSwitch = true,
-                        isActive = isDesktopMode,
-                        onClick = { isDesktopMode = !isDesktopMode },
-                        tag = "desktop_mode_card"
-                    )
-                }
-                item {
-                    BentoCard(
-                        title = "Login",
-                        icon = Icons.Default.Login,
-                        iconBg = Blue50,
-                        iconTint = Blue500,
-                        onClick = { showCookieLoginDialog = true },
-                        tag = "cookie_login_card"
-                    )
-                }
-                item {
-                    BentoCard(
-                        title = "Cookie",
-                        icon = Icons.Default.ContentCopy,
-                        iconBg = Indigo50,
-                        iconTint = Indigo600,
-                        onClick = {
-                            val cookies = CookieManager.getInstance().getCookie(currentUrl)
-                            if (cookies != null) {
-                                val clip = android.content.ClipData.newPlainText("Cookies", cookies)
-                                clipboardManager.setPrimaryClip(clip)
-                                android.widget.Toast.makeText(context, "Cookies copied!", android.widget.Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                        tag = "copy_cookie_card"
-                    )
-                }
-                item {
-                    BentoCard(
-                        title = "UID",
-                        icon = Icons.Default.Fingerprint,
-                        iconBg = Slate100,
-                        iconTint = Slate900,
-                        onClick = {
-                            val cookies = CookieManager.getInstance().getCookie(currentUrl)
-                            if (cookies != null) {
-                                val cUser = cookies.split("; ").find { it.startsWith("c_user=") }?.split("=")?.get(1)
-                                if (cUser != null) {
-                                    val clip = android.content.ClipData.newPlainText("UID", cUser)
-                                    clipboardManager.setPrimaryClip(clip)
-                                    android.widget.Toast.makeText(context, "UID copied: $cUser", android.widget.Toast.LENGTH_SHORT).show()
-                                } else {
-                                    android.widget.Toast.makeText(context, "UID not found in cookies!", android.widget.Toast.LENGTH_SHORT).show()
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    item {
+                        Text(
+                            text = "সংরক্ষিত প্রক্সি প্রোফাইলসমূহ (${proxies.size})",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Slate600,
+                            modifier = Modifier.padding(bottom = 4.dp)
+                        )
+                    }
+
+                    items(proxies) { proxy ->
+                        val isActive = activeProxy?.id == proxy.id
+                        val borderColor by animateColorAsState(
+                            targetValue = if (isActive) Blue500 else Color.Transparent,
+                            label = "border_color"
+                        )
+
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.5.dp, borderColor, RoundedCornerShape(16.dp))
+                                .clickable {
+                                    viewModel.selectProxy(proxy, context)
+                                    android.widget.Toast
+                                        .makeText(
+                                            context,
+                                            "${proxy.name} সিলেক্ট করা হয়েছে!",
+                                            android.widget.Toast.LENGTH_SHORT
+                                        )
+                                        .show()
+                                }
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(44.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(if (isActive) Blue50 else Slate100),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = if (proxy.type == "SOCKS5") Icons.Default.SettingsInputHdmi else Icons.Default.SettingsEthernet,
+                                            contentDescription = null,
+                                            tint = if (isActive) Blue600 else Slate600
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.width(14.dp))
+
+                                    Column {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = proxy.name,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 14.sp,
+                                                color = Slate900
+                                            )
+                                            if (isActive) {
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Surface(
+                                                    color = Emerald600,
+                                                    shape = RoundedCornerShape(4.dp)
+                                                ) {
+                                                    Text(
+                                                        text = "ACTIVE",
+                                                        color = Color.White,
+                                                        fontSize = 8.sp,
+                                                        fontWeight = FontWeight.ExtraBold,
+                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        Text(
+                                            text = "${proxy.host}:${proxy.port}",
+                                            fontSize = 12.sp,
+                                            color = Slate500,
+                                            fontFamily = FontFamily.Monospace,
+                                            modifier = Modifier.padding(top = 2.dp)
+                                        )
+                                    }
+                                }
+
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Surface(
+                                        color = if (proxy.type == "SOCKS5") Orange600.copy(alpha = 0.1f) else Blue500.copy(alpha = 0.1f),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text(
+                                            text = proxy.type,
+                                            color = if (proxy.type == "SOCKS5") Orange600 else Blue500,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 10.sp,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.width(8.dp))
+
+                                    IconButton(
+                                        onClick = {
+                                            viewModel.deleteProxy(proxy, context)
+                                            android.widget.Toast.makeText(context, "ডিলিট করা হয়েছে!", android.widget.Toast.LENGTH_SHORT).show()
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = "Delete",
+                                            tint = WarningRed,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
                                 }
                             }
-                        },
-                        tag = "copy_uid_card"
-                    )
-                }
-                item {
-                    BentoCard(
-                        title = "Email",
-                        icon = Icons.Default.Email,
-                        iconBg = Indigo50,
-                        iconTint = Indigo600,
-                        onClick = {
-                            val firstNames = listOf("mariya", "mim", "sadia", "fatema", "sumaiya", "sadiya", "laboni", "ritu", "mou", "nusrat", "tania", "aysha")
-                            val lastNames = listOf("akter", "khatun", "islam", "rahman", "mimi", "sultana", "chowdhury", "khan", "begum")
-                            val domains = listOf("hotmail.com", "gmail.com", "outlook.com", "yahoo.com")
-                            
-                            val random = java.util.Random()
-                            val email = "${firstNames[random.nextInt(firstNames.size)]}${lastNames[random.nextInt(lastNames.size)]}${random.nextInt(90000) + 10000}@${domains[random.nextInt(domains.size)]}"
-                            
-                            val clip = android.content.ClipData.newPlainText("Random Email", email)
-                            clipboardManager.setPrimaryClip(clip)
-                            android.widget.Toast.makeText(context, "Email copied: $email", android.widget.Toast.LENGTH_SHORT).show()
-                        },
-                        tag = "copy_email_card"
-                    )
-                }
-            }
-
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 2.dp),
-                shape = RoundedCornerShape(6.dp),
-                color = WarningRed,
-                shadowElevation = 1.dp
-            ) {
-                Button(
-                    onClick = {
-                        webView?.apply {
-                            clearCache(true)
-                            clearHistory()
-                            CookieManager.getInstance().removeAllCookies(null)
-                            CookieManager.getInstance().flush()
-                            loadUrl("https://limited.facebook.com")
                         }
-                        isDesktopMode = false
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(30.dp)
-                        .testTag("clear_reload_button"),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
-                    shape = RoundedCornerShape(6.dp),
-                    contentPadding = PaddingValues(0.dp)
-                ) {
-                    Icon(Icons.Default.DeleteForever, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("CLEAR & RELOAD", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 10.sp)
+                    }
                 }
             }
 
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 2.dp),
-                shape = RoundedCornerShape(6.dp),
-                color = Blue500,
-                shadowElevation = 1.dp
-            ) {
-                Button(
-                    onClick = {
-                        showPasswordDialog = true
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(30.dp)
-                        .testTag("start_ban_button"),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
-                    shape = RoundedCornerShape(6.dp),
-                    contentPadding = PaddingValues(0.dp)
-                ) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("START BAN", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 10.sp)
-                }
-            }
-            
-            if (showPasswordDialog) {
+            if (showAddDialog) {
                 AlertDialog(
-                    onDismissRequest = { 
-                        showPasswordDialog = false
-                        passwordInput = ""
+                    onDismissRequest = { showAddDialog = false },
+                    title = {
+                        Text(
+                            text = "নতুন প্রক্সি যুক্ত করুন",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp,
+                            color = Slate900
+                        )
                     },
-                    title = { Text("Enter Password") },
                     text = {
-                        Column {
-                            Text("Please enter the security password to proceed.")
-                            Spacer(Modifier.height(8.dp))
-                            TextField(
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedTextField(
+                                value = nameInput,
+                                onValueChange = { nameInput = it },
+                                label = { Text("প্রোফাইল নাম (Label)") },
+                                placeholder = { Text("e.g. Premium HK Proxy") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            OutlinedTextField(
+                                value = hostInput,
+                                onValueChange = { hostInput = it },
+                                label = { Text("আইপি বা হোস্ট (Host/IP)") },
+                                placeholder = { Text("e.g. 192.168.1.1") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            OutlinedTextField(
+                                value = portInput,
+                                onValueChange = { portInput = it },
+                                label = { Text("পোর্ট (Port)") },
+                                placeholder = { Text("e.g. 8080") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            OutlinedTextField(
+                                value = usernameInput,
+                                onValueChange = { usernameInput = it },
+                                label = { Text("ইউজারনেম (Username - Optional)") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            OutlinedTextField(
                                 value = passwordInput,
                                 onValueChange = { passwordInput = it },
-                                modifier = Modifier.fillMaxWidth(),
-                                placeholder = { Text("Password") },
-                                singleLine = true
+                                label = { Text("পাসওয়ার্ড (Password - Optional)") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
                             )
+
+                            Text(
+                                text = "প্রোটোকল সিলেক্ট করুন",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Slate600
+                            )
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                val borderHttp = if (selectedType == "HTTP") 2.dp else 1.dp
+                                val colorHttp = if (selectedType == "HTTP") Blue600 else Slate200
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(if (selectedType == "HTTP") Blue50 else Color.Transparent)
+                                        .border(borderHttp, colorHttp, RoundedCornerShape(8.dp))
+                                        .clickable { selectedType = "HTTP" }
+                                        .padding(vertical = 10.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text("HTTP / HTTPS", fontWeight = FontWeight.Bold, color = if (selectedType == "HTTP") Blue600 else Slate700, fontSize = 12.sp)
+                                }
+
+                                val borderSocks = if (selectedType == "SOCKS5") 2.dp else 1.dp
+                                val colorSocks = if (selectedType == "SOCKS5") Orange600 else Slate200
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(if (selectedType == "SOCKS5") Orange50 else Color.Transparent)
+                                        .border(borderSocks, colorSocks, RoundedCornerShape(8.dp))
+                                        .clickable { selectedType = "SOCKS5" }
+                                        .padding(vertical = 10.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text("SOCKS5", fontWeight = FontWeight.Bold, color = if (selectedType == "SOCKS5") Orange600 else Slate700, fontSize = 12.sp)
+                                }
+                            }
                         }
                     },
                     confirmButton = {
                         Button(
                             onClick = {
-                                if (passwordInput == remotePassword) {
-                                    showPasswordDialog = false
-                                    passwordInput = ""
-                                    scope.launch {
-                                        // 1. Data Clear & Reload
-                                        webView?.apply {
-                                            clearCache(true)
-                                            clearHistory()
-                                            CookieManager.getInstance().removeAllCookies(null)
-                                            CookieManager.getInstance().flush()
-                                        }
-                                        
-                                        // 2. Auto Login with Last Cookie
-                                        if (lastUsedCookie.isNotEmpty()) {
-                                            val cookieManager = CookieManager.getInstance()
-                                            cookieManager.setAcceptCookie(true)
-                                            val cookies = lastUsedCookie.split(";")
-                                            for (cookie in cookies) {
-                                                cookieManager.setCookie("https://.facebook.com", cookie.trim())
-                                            }
-                                            cookieManager.flush()
-                                        }
-                                        
-                                        webView?.loadUrl("https://limited.facebook.com")
-                                        
-                                        // 3. Desktop Mode ON then OFF
-                                        kotlinx.coroutines.delay(2000) // Wait for page to start loading
-                                        isDesktopMode = true
-                                        kotlinx.coroutines.delay(1000) // Short stay in desktop mode
-                                        isDesktopMode = false
-                                    }
+                                val parsedPort = portInput.toIntOrNull()
+                                if (nameInput.isEmpty() || hostInput.isEmpty() || parsedPort == null) {
+                                    android.widget.Toast.makeText(context, "দয়া করে সঠিক নাম, হোস্ট ও পোর্ট দিন!", android.widget.Toast.LENGTH_SHORT).show()
                                 } else {
-                                    android.widget.Toast.makeText(context, "Wrong Password", android.widget.Toast.LENGTH_SHORT).show()
+                                    val proxy = ProxyEntity(
+                                        name = nameInput,
+                                        host = hostInput,
+                                        port = parsedPort,
+                                        username = usernameInput,
+                                        password = passwordInput,
+                                        type = selectedType
+                                    )
+                                    viewModel.addProxy(proxy)
+                                    showAddDialog = false
+                                    android.widget.Toast.makeText(context, "প্রক্সি সংরক্ষণ করা হয়েছে!", android.widget.Toast.LENGTH_SHORT).show()
                                 }
-                            }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Blue600)
                         ) {
-                            Text("Confirm")
+                            Text("সেভ করুন")
                         }
                     },
                     dismissButton = {
-                        TextButton(onClick = { 
-                            showPasswordDialog = false 
-                            passwordInput = ""
-                        }) {
-                            Text("Cancel")
+                        TextButton(onClick = { showAddDialog = false }) {
+                            Text("বাতিল", color = Slate600)
                         }
                     }
                 )
             }
-            
-            Spacer(Modifier.navigationBarsPadding())
         }
+    }
+}
 
-        if (showGuideDialog) {
-            AlertDialog(
-                onDismissRequest = { showGuideDialog = false },
-                title = {
+@Composable
+fun GuideTab() {
+    val stepsBengali = listOf(
+        "১. প্রক্সি প্রোফাইল যুক্ত করা: 'প্রোফাইল' ট্যাবে যান, (+) আইকনে চাপ দিন এবং আপনার প্রক্সি হোস্ট, পোর্ট এবং লগইন তথ্য দিয়ে সেভ করুন।",
+        "২. সংযোগ চালু করা: 'সংযোগ' ট্যাবে গিয়ে কাঙ্ক্ষিত প্রক্সিটি সিলেক্ট করে 'চালু করুন (CONNECT)' বাটনে চাপ দিন। আপনার থেকে প্রথমবার ভিপিএন পারমিশন চাইলে তা অনুমোদন করুন।",
+        "৩. ডিভাইস-ওয়াইড রাউটিং: ভিপিএন চালু হওয়ার সাথে সাথে আপনার পুরো ডিভাইসের HTTP/HTTPS রিকোয়েস্ট আমাদের সুরক্ষিত লোকাল টানেলের মাধ্যমে প্রক্সিতে ফরওয়ার্ড করা হবে।",
+        "৪. সংযোগের আইপি পরীক্ষা: 'প্রক্সি টেস্ট করুন' বাটনে চাপ দিন। আপনার স্ক্রিনে প্রক্সির আইপি, লেটেন্সি, আইএসপি এবং দেশের লোকেশন লাইভ দেখতে পাবেন।"
+    )
+
+    val stepsEnglish = listOf(
+        "1. Setting Proxy Profile: Go to 'Profiles' tab, click (+) button, fill host, port and optional auth info, then save.",
+        "2. Connecting Proxy: On 'Connection' tab, select your profile and press 'CONNECT'. Approve the VPN connection request on first launch.",
+        "3. System-wide Proxy: Once connected, the app routes all device HTTP/HTTPS traffic through our secure local proxy tunnel.",
+        "4. Live IP Geolocation Check: Click 'Test Proxy Connection' to audit network latency, ISP, IP address and actual server location."
+    )
+
+    var currentLangBengali by remember { mutableStateOf(true) }
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Slate900),
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(20.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = if (guideLanguage == "BN") "ব্যবহার বিধি" else "How to Use",
+                            text = if (currentLangBengali) "ব্যবহার বিধি ও গাইড" else "How To Use & Guide",
+                            color = Color.White,
                             fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
+                            fontWeight = FontWeight.Bold
                         )
-                        Row(
-                            modifier = Modifier
-                                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(20.dp))
-                                .padding(2.dp)
+
+                        Button(
+                            onClick = { currentLangBengali = !currentLangBengali },
+                            colors = ButtonDefaults.buttonColors(containerColor = Slate700),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+                            modifier = Modifier.height(30.dp),
+                            shape = RoundedCornerShape(20.dp)
                         ) {
-                            val btnMod = Modifier
-                                .clip(RoundedCornerShape(20.dp))
-                                .clickable { guideLanguage = if (guideLanguage == "BN") "EN" else "BN" }
-                                .padding(horizontal = 12.dp, vertical = 4.dp)
-                            
                             Text(
-                                text = if (guideLanguage == "BN") "English" else "বাংলা",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = btnMod
+                                text = if (currentLangBengali) "English" else "বাংলা",
+                                fontSize = 11.sp,
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold
                             )
                         }
                     }
-                },
-                text = {
-                    val steps = if (guideLanguage == "BN") {
-                        listOf(
-                            "১. কুকিজ দিয়ে লগইন করুন।",
-                            "২. ইমেইল এড্রেস যোগ করুন।",
-                            "৩. চাপ দিয়ে লগ আউট করুন।",
-                            "৪. 'START BAN' বাটনে চাপ দিন।",
-                            "৫. ৫ সেকেন্ড পর 'Forgot Password' এ যান।",
-                            "৬. ইমেইল দিয়ে একাউন্ট সার্চ করুন।",
-                            "৭. 'Try Another Way' সিলেক্ট করুন।",
-                            "৮. 'No longer have access to these?' সিলেক্ট করুন।",
-                            "৯. 'Recover' এ ক্লিক করুন।",
-                            "১০. নাম্বারে এসএমএস পাঠিয়ে ওটিপি দিন।",
-                            "১১. নতুন পাসওয়ার্ড সেট করুন।"
-                        )
-                    } else {
-                        listOf(
-                            "1. Login with Cookies.",
-                            "2. Add an Email address.",
-                            "3. Press to Logout.",
-                            "4. Press 'START BAN' button.",
-                            "5. Wait 5s, then go to 'Forgot Password'.",
-                            "6. Search account via Email.",
-                            "7. Select 'Try Another Way'.",
-                            "8. Select 'No longer have access to these?'.",
-                            "9. Click 'Recover'.",
-                            "10. Send SMS to number & enter OTP.",
-                            "11. Set new password."
-                        )
-                    }
-                    LazyColumn(modifier = Modifier.heightIn(max = 400.dp)) {
-                        items(steps) { step ->
-                            Text(
-                                text = step,
-                                fontSize = 14.sp,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.padding(vertical = 4.dp)
-                            )
-                        }
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = { showGuideDialog = false }) {
-                        Text(if (guideLanguage == "BN") "বন্ধ করুন" else "Close", color = Blue500)
-                    }
-                }
-            )
-        }
 
-        if (showCookieLoginDialog) {
-            AlertDialog(
-                onDismissRequest = { showCookieLoginDialog = false },
-                title = { Text("Login with Cookies", fontSize = 16.sp, fontWeight = FontWeight.Bold) },
-                text = {
-                    Column {
-                        Text("Paste your cookie string below:", fontSize = 12.sp, color = Slate600)
-                        Spacer(Modifier.height(8.dp))
-                        TextField(
-                            value = cookieInput,
-                            onValueChange = { cookieInput = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            placeholder = { Text("datr=...; c_user=...;", fontSize = 10.sp) },
-                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 10.sp)
-                        )
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        if (cookieInput.isNotEmpty()) {
-                            val cookieManager = CookieManager.getInstance()
-                            cookieManager.setAcceptCookie(true)
-                            val cookies = cookieInput.split(";")
-                            for (cookie in cookies) {
-                                cookieManager.setCookie("https://.facebook.com", cookie.trim())
-                            }
-                            cookieManager.flush()
-                            lastUsedCookie = cookieInput
-                            webView?.loadUrl("https://limited.facebook.com")
-                            showCookieLoginDialog = false
-                            cookieInput = ""
-                        }
-                    }) {
-                        Text("Login", color = Blue500)
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showCookieLoginDialog = false }) {
-                        Text("Cancel", color = Slate500)
-                    }
-                }
-            )
-        }
-    }
-}
-
-@Composable
-fun BentoCard(
-    title: String,
-    icon: ImageVector,
-    iconBg: Color,
-    iconTint: Color,
-    showSwitch: Boolean = false,
-    isActive: Boolean = false,
-    onClick: () -> Unit,
-    tag: String
-) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(CardWhite)
-            .clickable { onClick() }
-            .border(
-                width = 1.dp,
-                color = if (isActive && showSwitch) Blue500 else Slate100,
-                shape = RoundedCornerShape(10.dp)
-            )
-            .padding(horizontal = 8.dp, vertical = 4.dp)
-            .testTag(tag)
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(20.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(iconBg),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = iconTint,
-                    modifier = Modifier.size(12.dp)
-                )
-            }
-            Spacer(Modifier.width(6.dp))
-            Text(
-                text = if (isActive && showSwitch) title.uppercase() else title,
-                fontWeight = if (isActive && showSwitch) FontWeight.ExtraBold else FontWeight.Bold,
-                fontSize = 10.sp,
-                color = if (isActive && showSwitch) Blue500 else Slate700,
-                textAlign = TextAlign.Center
-            )
-            
-            if (showSwitch) {
-                Spacer(Modifier.width(6.dp))
-                Switch(
-                    checked = isActive,
-                    onCheckedChange = { onClick() },
-                    modifier = Modifier.scale(0.5f), // Make the switch very small to fit
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = Blue500,
-                        uncheckedThumbColor = Slate400,
-                        uncheckedTrackColor = Slate200
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = if (currentLangBengali) "সম্পূর্ণ অ্যাপ্লিকেশনের কাজের বিবরণী নিচে দেওয়া হলো:"
+                        else "Comprehensive guide detailing each step of the direct proxy routing setup:",
+                        color = Slate400,
+                        fontSize = 12.sp
                     )
-                )
+                }
+            }
+        }
+
+        val stepsToDisplay = if (currentLangBengali) stepsBengali else stepsEnglish
+
+        items(stepsToDisplay) { step ->
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .clip(CircleShape)
+                            .background(Blue50),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = null,
+                            tint = Blue600,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    Text(
+                        text = step,
+                        fontSize = 13.sp,
+                        color = Slate800,
+                        fontWeight = FontWeight.Medium,
+                        lineHeight = 20.sp
+                    )
+                }
             }
         }
     }

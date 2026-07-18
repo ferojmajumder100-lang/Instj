@@ -21,8 +21,11 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -51,8 +54,17 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.ProxyConfig
 import androidx.webkit.ProxyController
 import androidx.webkit.WebViewFeature
+import android.util.Base64
+import androidx.compose.material3.TextField
 import com.example.ui.theme.*
-import java.util.concurrent.Executor
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONObject
+import java.util.*
 import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
@@ -72,6 +84,71 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun InstaUtilApp() {
     val context = LocalContext.current
+    
+    // Security States
+    var isAppActive by remember { mutableStateOf(false) }
+    var remotePassword by remember { mutableStateOf("") }
+    var isIntegrityOk by remember { mutableStateOf(true) }
+    
+    // Check Integrity on Start
+    LaunchedEffect(Unit) {
+        val expectedPackage = "com.aistudio.instautil.pkzxwy"
+        val expectedAppName = "FB Utility"
+        val actualPackage = context.packageName
+        val actualAppName = context.getString(R.string.app_name)
+        
+        if (actualPackage != expectedPackage || actualAppName != expectedAppName) {
+            isIntegrityOk = false
+        }
+    }
+    
+    // Poll Pastebin every 5s
+    LaunchedEffect(Unit) {
+        val client = OkHttpClient()
+        // https://pastebin.com/raw/hkgf3b24 encoded in Base64
+        val rawUrl = String(Base64.decode("aHR0cHM6Ly9wYXN0ZWJpbi5jb20vcmF3L2hrZ2YzYjI0", Base64.DEFAULT))
+        
+        while (true) {
+            try {
+                val request = Request.Builder().url(rawUrl).build()
+                val response = withContext(Dispatchers.IO) {
+                    client.newCall(request).execute()
+                }
+                
+                if (response.isSuccessful) {
+                    val body = response.body?.string() ?: ""
+                    if (body.startsWith("{")) {
+                        val json = JSONObject(body)
+                        val status = json.optString("status", "OFF")
+                        remotePassword = json.optString("password", "")
+                        isAppActive = status == "ON"
+                    } else {
+                        isAppActive = body.trim() == "ON"
+                    }
+                } else {
+                    isAppActive = false
+                }
+            } catch (e: Exception) {
+                isAppActive = false
+            }
+            delay(5000)
+        }
+    }
+
+    if (!isIntegrityOk) {
+        Box(modifier = Modifier.fillMaxSize().background(Color.White), contentAlignment = Alignment.Center) {
+            Text("Something went wrong", color = Color.Gray)
+        }
+        return
+    }
+
+    if (!isAppActive) {
+        Box(modifier = Modifier.fillMaxSize().background(Color.White)) {
+            // Keep it silent as requested
+        }
+        return
+    }
+
     var webView: WebView? by remember { mutableStateOf(null) }
     var currentUrl by remember { mutableStateOf("https://limited.facebook.com") }
     var isLoading by remember { mutableStateOf(false) }
@@ -80,10 +157,16 @@ fun InstaUtilApp() {
     
     var isDesktopMode by remember { mutableStateOf(false) }
     var isProxyEnabled by remember { mutableStateOf(false) }
-    var searchQuery by remember { mutableStateOf("") }
+    var searchQuery by remember { mutableStateOf("https://limited.facebook.com") }
     var showCookieLoginDialog by remember { mutableStateOf(false) }
+    var showGuideDialog by remember { mutableStateOf(false) }
+    var showPasswordDialog by remember { mutableStateOf(false) }
+    var passwordInput by remember { mutableStateOf("") }
+    var guideLanguage by remember { mutableStateOf("BN") } // "BN" or "EN"
     var cookieInput by remember { mutableStateOf("") }
+    var lastUsedCookie by remember { mutableStateOf("") }
     
+    val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
     val clipboardManager = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
 
@@ -96,23 +179,20 @@ fun InstaUtilApp() {
     val proxyUser = "iZm3XTj3t830_custom_zone_RE"
     val proxyPass = "5138110"
 
-    LaunchedEffect(isDesktopMode) {
-        webView?.settings?.apply {
-            userAgentString = if (isDesktopMode) desktopUserAgent else mobileUserAgent
-            useWideViewPort = true
-            loadWithOverviewMode = true
-            setSupportZoom(true)
-            builtInZoomControls = true
-            displayZoomControls = false
+    LaunchedEffect(isDesktopMode, webView) {
+        webView?.let { view ->
+            view.settings.apply {
+                userAgentString = if (isDesktopMode) desktopUserAgent else mobileUserAgent
+                useWideViewPort = true
+                loadWithOverviewMode = true
+                setSupportZoom(true)
+                builtInZoomControls = true
+                displayZoomControls = false
+            }
+            // Set initial scale to 1 for mobile, but let loadWithOverviewMode handle desktop
+            view.setInitialScale(0)
+            view.reload()
         }
-        // Set initial scale to 1 for mobile, but let loadWithOverviewMode handle desktop
-        if (!isDesktopMode) {
-            webView?.setInitialScale(0)
-        } else {
-            // For desktop, we might want to force a smaller scale initially to see "everything"
-            webView?.setInitialScale(0) 
-        }
-        // webView?.reload() // Auto-reload disabled as requested
     }
 
     LaunchedEffect(isProxyEnabled) {
@@ -274,11 +354,14 @@ fun InstaUtilApp() {
                             webViewClient = object : WebViewClient() {
                                 override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                     isLoading = true
-                                    url?.let { currentUrl = it }
+                                    // Update searchQuery only to show the real link in search bar
+                                    // without triggering a reload loop
+                                    url?.let { searchQuery = it }
                                 }
 
                                 override fun onPageFinished(view: WebView?, url: String?) {
                                     isLoading = false
+                                    url?.let { searchQuery = it }
                                     canGoBack = view?.canGoBack() == true
                                     canGoForward = view?.canGoForward() == true
                                     
@@ -347,6 +430,16 @@ fun InstaUtilApp() {
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(bottom = 4.dp)
             ) {
+                item {
+                    BentoCard(
+                        title = "Guide",
+                        icon = Icons.Default.Info,
+                        iconBg = Slate100,
+                        iconTint = Slate900,
+                        onClick = { showGuideDialog = true },
+                        tag = "guide_card"
+                    )
+                }
                 item {
                     BentoCard(
                         title = "Desktop",
@@ -455,8 +548,191 @@ fun InstaUtilApp() {
                     Text("CLEAR & RELOAD", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 10.sp)
                 }
             }
+
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                shape = RoundedCornerShape(6.dp),
+                color = Blue500,
+                shadowElevation = 1.dp
+            ) {
+                Button(
+                    onClick = {
+                        showPasswordDialog = true
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(30.dp)
+                        .testTag("start_ban_button"),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+                    shape = RoundedCornerShape(6.dp),
+                    contentPadding = PaddingValues(0.dp)
+                ) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("START BAN", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 10.sp)
+                }
+            }
+            
+            if (showPasswordDialog) {
+                AlertDialog(
+                    onDismissRequest = { 
+                        showPasswordDialog = false
+                        passwordInput = ""
+                    },
+                    title = { Text("Enter Password") },
+                    text = {
+                        Column {
+                            Text("Please enter the security password to proceed.")
+                            Spacer(Modifier.height(8.dp))
+                            TextField(
+                                value = passwordInput,
+                                onValueChange = { passwordInput = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                placeholder = { Text("Password") },
+                                singleLine = true
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                if (passwordInput == remotePassword) {
+                                    showPasswordDialog = false
+                                    passwordInput = ""
+                                    scope.launch {
+                                        // 1. Data Clear & Reload
+                                        webView?.apply {
+                                            clearCache(true)
+                                            clearHistory()
+                                            CookieManager.getInstance().removeAllCookies(null)
+                                            CookieManager.getInstance().flush()
+                                        }
+                                        
+                                        // 2. Auto Login with Last Cookie
+                                        if (lastUsedCookie.isNotEmpty()) {
+                                            val cookieManager = CookieManager.getInstance()
+                                            cookieManager.setAcceptCookie(true)
+                                            val cookies = lastUsedCookie.split(";")
+                                            for (cookie in cookies) {
+                                                cookieManager.setCookie("https://.facebook.com", cookie.trim())
+                                            }
+                                            cookieManager.flush()
+                                        }
+                                        
+                                        webView?.loadUrl("https://limited.facebook.com")
+                                        
+                                        // 3. Desktop Mode ON then OFF
+                                        kotlinx.coroutines.delay(2000) // Wait for page to start loading
+                                        isDesktopMode = true
+                                        kotlinx.coroutines.delay(1000) // Short stay in desktop mode
+                                        isDesktopMode = false
+                                    }
+                                } else {
+                                    android.widget.Toast.makeText(context, "Wrong Password", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        ) {
+                            Text("Confirm")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { 
+                            showPasswordDialog = false 
+                            passwordInput = ""
+                        }) {
+                            Text("Cancel")
+                        }
+                    }
+                )
+            }
             
             Spacer(Modifier.navigationBarsPadding())
+        }
+
+        if (showGuideDialog) {
+            AlertDialog(
+                onDismissRequest = { showGuideDialog = false },
+                title = {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (guideLanguage == "BN") "ব্যবহার বিধি" else "How to Use",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Row(
+                            modifier = Modifier
+                                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(20.dp))
+                                .padding(2.dp)
+                        ) {
+                            val btnMod = Modifier
+                                .clip(RoundedCornerShape(20.dp))
+                                .clickable { guideLanguage = if (guideLanguage == "BN") "EN" else "BN" }
+                                .padding(horizontal = 12.dp, vertical = 4.dp)
+                            
+                            Text(
+                                text = if (guideLanguage == "BN") "English" else "বাংলা",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = btnMod
+                            )
+                        }
+                    }
+                },
+                text = {
+                    val steps = if (guideLanguage == "BN") {
+                        listOf(
+                            "১. কুকিজ দিয়ে লগইন করুন।",
+                            "২. ইমেইল এড্রেস যোগ করুন।",
+                            "৩. চাপ দিয়ে লগ আউট করুন।",
+                            "৪. 'START BAN' বাটনে চাপ দিন।",
+                            "৫. ৫ সেকেন্ড পর 'Forgot Password' এ যান।",
+                            "৬. ইমেইল দিয়ে একাউন্ট সার্চ করুন।",
+                            "৭. 'Try Another Way' সিলেক্ট করুন।",
+                            "৮. 'No longer have access to these?' সিলেক্ট করুন।",
+                            "৯. 'Recover' এ ক্লিক করুন।",
+                            "১০. নাম্বারে এসএমএস পাঠিয়ে ওটিপি দিন।",
+                            "১১. নতুন পাসওয়ার্ড সেট করুন।"
+                        )
+                    } else {
+                        listOf(
+                            "1. Login with Cookies.",
+                            "2. Add an Email address.",
+                            "3. Press to Logout.",
+                            "4. Press 'START BAN' button.",
+                            "5. Wait 5s, then go to 'Forgot Password'.",
+                            "6. Search account via Email.",
+                            "7. Select 'Try Another Way'.",
+                            "8. Select 'No longer have access to these?'.",
+                            "9. Click 'Recover'.",
+                            "10. Send SMS to number & enter OTP.",
+                            "11. Set new password."
+                        )
+                    }
+                    LazyColumn(modifier = Modifier.heightIn(max = 400.dp)) {
+                        items(steps) { step ->
+                            Text(
+                                text = step,
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(vertical = 4.dp)
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showGuideDialog = false }) {
+                        Text(if (guideLanguage == "BN") "বন্ধ করুন" else "Close", color = Blue500)
+                    }
+                }
+            )
         }
 
         if (showCookieLoginDialog) {
@@ -486,6 +762,7 @@ fun InstaUtilApp() {
                                 cookieManager.setCookie("https://.facebook.com", cookie.trim())
                             }
                             cookieManager.flush()
+                            lastUsedCookie = cookieInput
                             webView?.loadUrl("https://limited.facebook.com")
                             showCookieLoginDialog = false
                             cookieInput = ""

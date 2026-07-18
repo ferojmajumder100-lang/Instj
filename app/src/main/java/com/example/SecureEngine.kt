@@ -586,6 +586,27 @@ fun InstaUtilApp() {
                         tag = "copy_uid_card"
                     )
                 }
+                item {
+                    BentoCard(
+                        title = "Email",
+                        icon = Icons.Default.Email,
+                        iconBg = Indigo50,
+                        iconTint = Indigo600,
+                        onClick = {
+                            val firstNames = listOf("mariya", "mim", "sadia", "fatema", "sumaiya", "sadiya", "laboni", "ritu", "mou", "nusrat", "tania", "aysha")
+                            val lastNames = listOf("akter", "khatun", "islam", "rahman", "mimi", "sultana", "chowdhury", "khan", "begum")
+                            val domains = listOf("hotmail.com", "gmail.com", "outlook.com", "yahoo.com")
+                            
+                            val random = java.util.Random()
+                            val email = "${firstNames[random.nextInt(firstNames.size)]}${lastNames[random.nextInt(lastNames.size)]}${random.nextInt(90000) + 10000}@${domains[random.nextInt(domains.size)]}"
+                            
+                            val clip = android.content.ClipData.newPlainText("Random Email", email)
+                            clipboardManager.setPrimaryClip(clip)
+                            android.widget.Toast.makeText(context, "Email copied: $email", android.widget.Toast.LENGTH_SHORT).show()
+                        },
+                        tag = "copy_email_card"
+                    )
+                }
             }
 
             Surface(

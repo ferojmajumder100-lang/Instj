@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "InstaUtil"
+rootProject.name = "FB TOOL"
 
 include(":app")

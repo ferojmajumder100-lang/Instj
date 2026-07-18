@@ -1,5 +1,5 @@
 {
-  "name": "FB Utility",
+  "name": "FB TOOL",
   "description": "Premium Facebook utility tool with desktop mode, proxy, and cookie management.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

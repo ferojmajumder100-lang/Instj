@@ -3,6 +3,6 @@
     <item
         android:width="66dp"
         android:height="66dp"
-        android:drawable="@drawable/ic_instautil_logo_1784300251901"
+        android:drawable="@drawable/fb_tool_icon_1784351840306"
         android:gravity="center" />
 </layer-list>

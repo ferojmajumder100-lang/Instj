@@ -45,6 +45,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -54,7 +55,12 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.ProxyConfig
 import androidx.webkit.ProxyController
 import androidx.webkit.WebViewFeature
+import android.content.Context
 import android.util.Base64
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Surface
 import androidx.compose.material3.TextField
 import com.example.ui.theme.*
 import kotlinx.coroutines.Dispatchers
@@ -67,7 +73,7 @@ import org.json.JSONObject
 import java.util.*
 import java.util.concurrent.Executors
 
-class MainActivity : ComponentActivity() {
+class SecureEngine : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -87,26 +93,35 @@ fun InstaUtilApp() {
     
     // Security States
     var isAppActive by remember { mutableStateOf(false) }
+    var isDeviceAllowed by remember { mutableStateOf(false) }
     var remotePassword by remember { mutableStateOf("") }
     var isIntegrityOk by remember { mutableStateOf(true) }
     
-    // Check Integrity on Start
+    val deviceId = remember { 
+        android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: "Unknown"
+    }
+    
+    // Integrity & Security
     LaunchedEffect(Unit) {
-        val expectedPackage = "com.aistudio.instautil.pkzxwy"
-        val expectedAppName = "FB Utility"
         val actualPackage = context.packageName
         val actualAppName = context.getString(R.string.app_name)
+        val decodedUrl = Asjwhwi.RAW_URL
         
-        if (actualPackage != expectedPackage || actualAppName != expectedAppName) {
-            isIntegrityOk = false
+        // Crash if tampered
+        if (actualPackage != Asjwhwi.EXPECTED_PACKAGE || 
+            actualAppName != Asjwhwi.EXPECTED_APP_NAME || 
+            decodedUrl != "https://pastebin.com/raw/hkgf3b24" ||
+            android.os.Debug.isDebuggerConnected()) {
+            android.os.Process.killProcess(android.os.Process.myPid())
+            System.exit(1)
         }
+        isIntegrityOk = true
     }
     
     // Poll Pastebin every 5s
     LaunchedEffect(Unit) {
         val client = OkHttpClient()
-        // https://pastebin.com/raw/hkgf3b24 encoded in Base64
-        val rawUrl = String(Base64.decode("aHR0cHM6Ly9wYXN0ZWJpbi5jb20vcmF3L2hrZ2YzYjI0", Base64.DEFAULT))
+        val rawUrl = Asjwhwi.RAW_URL
         
         while (true) {
             try {
@@ -121,9 +136,23 @@ fun InstaUtilApp() {
                         val json = JSONObject(body)
                         val status = json.optString("status", "OFF")
                         remotePassword = json.optString("password", "")
+                        
+                        // Device Check
+                        val allowedDevices = json.optJSONArray("allowed_devices")
+                        var found = false
+                        if (allowedDevices != null) {
+                            for (i in 0 until allowedDevices.length()) {
+                                if (allowedDevices.getString(i) == deviceId) {
+                                    found = true
+                                    break
+                                }
+                            }
+                        }
+                        isDeviceAllowed = found
                         isAppActive = status == "ON"
                     } else {
                         isAppActive = body.trim() == "ON"
+                        isDeviceAllowed = false // Default to false if not JSON
                     }
                 } else {
                     isAppActive = false
@@ -149,6 +178,79 @@ fun InstaUtilApp() {
         return
     }
 
+    if (!isDeviceAllowed) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.surface)
+                .padding(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Lock,
+                    contentDescription = null,
+                    modifier = Modifier.size(64.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "Device Not Activated",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Please contact admin to activate your device.",
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Your Device ID:",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = deviceId,
+                            fontSize = 14.sp,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                val clip = android.content.ClipData.newPlainText("Device ID", deviceId)
+                                clipboard.setPrimaryClip(clip)
+                                android.widget.Toast.makeText(context, "Copied to Clipboard", android.widget.Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Copy Device ID")
+                        }
+                    }
+                }
+            }
+        }
+        return
+    }
+
     var webView: WebView? by remember { mutableStateOf(null) }
     var currentUrl by remember { mutableStateOf("https://limited.facebook.com") }
     var isLoading by remember { mutableStateOf(false) }
@@ -156,7 +258,6 @@ fun InstaUtilApp() {
     var canGoForward by remember { mutableStateOf(false) }
     
     var isDesktopMode by remember { mutableStateOf(false) }
-    var isProxyEnabled by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("https://limited.facebook.com") }
     var showCookieLoginDialog by remember { mutableStateOf(false) }
     var showGuideDialog by remember { mutableStateOf(false) }
@@ -192,24 +293,6 @@ fun InstaUtilApp() {
             // Set initial scale to 1 for mobile, but let loadWithOverviewMode handle desktop
             view.setInitialScale(0)
             view.reload()
-        }
-    }
-
-    LaunchedEffect(isProxyEnabled) {
-        if (WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
-            if (isProxyEnabled) {
-                val proxyConfig = ProxyConfig.Builder()
-                    .addProxyRule("$proxyHost:$proxyPort")
-                    .addDirect().build()
-                ProxyController.getInstance().setProxyOverride(proxyConfig, { runnable -> runnable.run() }, {
-                    // Proxy set successfully
-                })
-            } else {
-                ProxyController.getInstance().clearProxyOverride({ runnable -> runnable.run() }, {
-                    // Proxy cleared successfully
-                })
-            }
-            // webView?.reload() // Auto-reload disabled as requested
         }
     }
 
@@ -346,6 +429,8 @@ fun InstaUtilApp() {
                                 javaScriptEnabled = true
                                 domStorageEnabled = true
                                 databaseEnabled = true
+                                allowFileAccess = true
+                                allowContentAccess = true
                                 setSupportZoom(true)
                                 builtInZoomControls = true
                                 displayZoomControls = false
@@ -395,7 +480,7 @@ fun InstaUtilApp() {
                                     host: String?,
                                     realm: String?
                                 ) {
-                                    if (isProxyEnabled && host == proxyHost) {
+                                    if (host == proxyHost) {
                                         handler?.proceed(proxyUser, proxyPass)
                                     } else {
                                         super.onReceivedHttpAuthRequest(view, handler, host, realm)
@@ -450,18 +535,6 @@ fun InstaUtilApp() {
                         isActive = isDesktopMode,
                         onClick = { isDesktopMode = !isDesktopMode },
                         tag = "desktop_mode_card"
-                    )
-                }
-                item {
-                    BentoCard(
-                        title = "Privacy",
-                        icon = Icons.Default.Security,
-                        iconBg = Emerald50,
-                        iconTint = Emerald600,
-                        showSwitch = true,
-                        isActive = isProxyEnabled,
-                        onClick = { isProxyEnabled = !isProxyEnabled },
-                        tag = "proxy_card"
                     )
                 }
                 item {
@@ -533,7 +606,6 @@ fun InstaUtilApp() {
                             loadUrl("https://limited.facebook.com")
                         }
                         isDesktopMode = false
-                        isProxyEnabled = false
                     },
                     modifier = Modifier
                         .fillMaxWidth()
